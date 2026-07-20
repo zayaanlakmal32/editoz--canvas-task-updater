@@ -10,43 +10,69 @@ export default async function handler(req, res) {
 
   try {
     if (action === "getClients") {
-      const r = await fetch(`https://api.notion.com/v1/databases/${PROJECT_DB_ID}/query`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${NOTION_TOKEN}`,
-          "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28",
-        },
-        body: JSON.stringify({ page_size: 100 }),
-      });
-      const data = await r.json();
-      const clients = (data.results || [])
+      let allResults = [];
+      let hasMore = true;
+      let startCursor = undefined;
+
+      while (hasMore) {
+        const body = { page_size: 100 };
+        if (startCursor) body.start_cursor = startCursor;
+
+        const r = await fetch(`https://api.notion.com/v1/databases/${PROJECT_DB_ID}/query`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${NOTION_TOKEN}`,
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28",
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        allResults = allResults.concat(data.results || []);
+        hasMore = data.has_more;
+        startCursor = data.next_cursor;
+      }
+
+      const clients = allResults
         .map((p) => {
           const props = p.properties;
           const canvasId = props["Slack Canvas ID"]?.rich_text?.[0]?.plain_text;
-          const nameProp = props["Client Name"] || props["Name"] || props["Title"];
-          const name = nameProp?.title?.[0]?.plain_text || nameProp?.rich_text?.[0]?.plain_text;
+          const name = props["Client Name"]?.title?.[0]?.plain_text;
           return canvasId && name ? { id: p.id, name, canvasId } : null;
         })
         .filter(Boolean)
         .sort((a, b) => a.name.localeCompare(b.name));
-      return res.json({ clients });
+
+      return res.json({ clients, total: allResults.length });
     }
 
     if (action === "getTasks") {
       const { clientId } = payload;
-      const r = await fetch(`https://api.notion.com/v1/databases/${TASK_DB_ID}/query`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${NOTION_TOKEN}`,
-          "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28",
-        },
-        body: JSON.stringify({ page_size: 100 }),
-      });
-      const data = await r.json();
+      let allResults = [];
+      let hasMore = true;
+      let startCursor = undefined;
+
+      while (hasMore) {
+        const body = { page_size: 100 };
+        if (startCursor) body.start_cursor = startCursor;
+
+        const r = await fetch(`https://api.notion.com/v1/databases/${TASK_DB_ID}/query`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${NOTION_TOKEN}`,
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28",
+          },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        allResults = allResults.concat(data.results || []);
+        hasMore = data.has_more;
+        startCursor = data.next_cursor;
+      }
+
       const clientIdClean = clientId.replace(/-/g, "");
-      const tasks = (data.results || [])
+      const tasks = allResults
         .filter((p) => {
           const relations = p.properties["Project Tracker Client"]?.relation || [];
           const status = p.properties["Status"]?.status?.name;
