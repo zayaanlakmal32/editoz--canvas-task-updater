@@ -1,4 +1,4 @@
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const { action, payload } = req.body;
@@ -102,4 +102,40 @@ export default async function handler(req, res) {
           const props = p.properties;
           return {
             actionItem: props["Action Item"]?.title?.[0]?.plain_text || "Untitled",
-            status:
+            status: props["Status"]?.status?.name || "No Status",
+            responsible: props["Responsible Person"]?.people?.[0]?.name || "Unassigned",
+            dueDate: props["Due date"]?.date?.start || "No date",
+          };
+        });
+      return res.json({ tasks });
+    }
+
+    if (action === "updateCanvas") {
+      const { canvasId, taskMarkdown } = payload;
+      const lookupRes = await fetch("https://slack.com/api/canvases.sections.lookup", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ canvas_id: canvasId, criteria: { contains_text: "Client Tasks" } }),
+      });
+      const lookupData = await lookupRes.json();
+      if (!lookupData.ok || !lookupData.sections?.length) {
+        return res.json({ success: false, error: "Client Tasks section not found in canvas" });
+      }
+      const sectionId = lookupData.sections[0].id;
+      const editRes = await fetch("https://slack.com/api/canvases.edit", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          canvas_id: canvasId,
+          changes: [{ operation: "replace", section_id: sectionId, document_content: { type: "markdown", markdown: taskMarkdown } }],
+        }),
+      });
+      const editData = await editRes.json();
+      return res.json({ success: editData.ok, error: editData.error });
+    }
+
+    return res.status(400).json({ error: "Unknown action" });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+};
