@@ -9,6 +9,28 @@ export default async function handler(req, res) {
   const TASK_DB_ID = process.env.TASK_DB_ID;
 
   try {
+    if (action === "debug") {
+      const r = await fetch(`https://api.notion.com/v1/databases/${PROJECT_DB_ID}/query`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${NOTION_TOKEN}`,
+          "Content-Type": "application/json",
+          "Notion-Version": "2022-06-28",
+        },
+        body: JSON.stringify({ page_size: 3 }),
+      });
+      const data = await r.json();
+      const first = data.results?.[0];
+      return res.json({
+        total: data.results?.length,
+        hasMore: data.has_more,
+        firstPageId: first?.id,
+        firstProps: first ? Object.keys(first.properties) : [],
+        clientNameRaw: first?.properties?.["Client Name"],
+        canvasIdRaw: first?.properties?.["Slack Canvas ID"],
+      });
+    }
+
     if (action === "getClients") {
       let allResults = [];
       let hasMore = true;
