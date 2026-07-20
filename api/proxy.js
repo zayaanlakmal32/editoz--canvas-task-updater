@@ -24,7 +24,8 @@ export default async function handler(req, res) {
         .map((p) => {
           const props = p.properties;
           const canvasId = props["Slack Canvas ID"]?.rich_text?.[0]?.plain_text;
-          const name = props["Client Name"]?.title?.[0]?.plain_text;
+          const nameProp = props["Client Name"] || props["Name"] || props["Title"];
+          const name = nameProp?.title?.[0]?.plain_text || nameProp?.rich_text?.[0]?.plain_text;
           return canvasId && name ? { id: p.id, name, canvasId } : null;
         })
         .filter(Boolean)
