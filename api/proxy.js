@@ -35,6 +35,17 @@ module.exports = async function handler(req, res) {
       });
     }
 
+    if (action === "debugCanvas") {
+      const { canvasId } = payload;
+      const lookupRes = await fetch("https://slack.com/api/canvases.sections.lookup", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ canvas_id: canvasId, criteria: { contains_text: "Client Tasks" } }),
+      });
+      const lookupData = await lookupRes.json();
+      return res.json(lookupData);
+    }
+
     if (action === "getClients") {
       let allResults = [];
       let hasMore = true;
