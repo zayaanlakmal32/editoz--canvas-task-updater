@@ -101,7 +101,7 @@ module.exports = async function handler(req, res) {
         .map((p) => {
           const props = p.properties;
           return {
-            actionItem: props["Action Item"]?.title?.[0]?.plain_text || "Untitled",
+            actionItem: props["Client Tasks"]?.title?.[0]?.plain_text || "Untitled",
             status: props["Status"]?.status?.name || "No Status",
             responsible: props["Responsible Person"]?.people?.[0]?.name || "Unassigned",
             dueDate: props["Due date"]?.date?.start || "No date",
