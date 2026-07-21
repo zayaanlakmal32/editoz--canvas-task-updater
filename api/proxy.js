@@ -132,17 +132,35 @@ module.exports = async function handler(req, res) {
       if (!lookupData.ok || !lookupData.sections?.length) {
         return res.json({ success: false, error: "Client Tasks section not found in canvas" });
       }
-      const sectionId = lookupData.sections[0].id;
+      const oldSectionId = lookupData.sections[0].id;
+
+      // Slack's "replace" operation with a section_id actually inserts the new content
+      // as a sibling AFTER the original section, rather than truly replacing it in place.
+      // So we insert the new content first, then explicitly delete the old section.
       const editRes = await fetch("https://slack.com/api/canvases.edit", {
         method: "POST",
         headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           canvas_id: canvasId,
-          changes: [{ operation: "replace", section_id: sectionId, document_content: { type: "markdown", markdown: taskMarkdown } }],
+          changes: [{ operation: "replace", section_id: oldSectionId, document_content: { type: "markdown", markdown: taskMarkdown } }],
         }),
       });
       const editData = await editRes.json();
-      return res.json({ success: editData.ok, error: editData.error });
+      if (!editData.ok) {
+        return res.json({ success: false, error: editData.error });
+      }
+
+      const deleteRes = await fetch("https://slack.com/api/canvases.edit", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          canvas_id: canvasId,
+          changes: [{ operation: "delete", section_id: oldSectionId }],
+        }),
+      });
+      const deleteData = await deleteRes.json();
+
+      return res.json({ success: editData.ok && deleteData.ok, error: deleteData.error });
     }
 
     return res.status(400).json({ error: "Unknown action" });
