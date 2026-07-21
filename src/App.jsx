@@ -40,8 +40,8 @@ export default function App() {
     setLoading(true);
     setStep("updating");
     const taskMarkdown = `✅ **Client Tasks**\n\n${tasks
-      .map((t) => `- [ ] **${t.actionItem}** — ${t.status} — 👤 ${t.responsible} — 📅 ${t.dueDate}`)
-      .join("\n")}`;
+  .map((t) => `• **${t.actionItem.trim()}** — ${t.status} — 👤 ${t.responsible} — 📅 ${t.dueDate}`)
+  .join("\n")}`;
     const data = await api("updateCanvas", { canvasId: selectedClient.canvasId, taskMarkdown });
     setStatus(data.success
       ? { type: "success", message: `Canvas updated with ${tasks.length} task${tasks.length !== 1 ? "s" : ""}!` }
