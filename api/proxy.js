@@ -1,141 +1,183 @@
-module.exports = async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+import { useState, useEffect } from "react";
 
-  const { action, payload } = req.body;
+async function api(action, payload = {}) {
+  const res = await fetch("/api/proxy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, payload }),
+  });
+  return res.json();
+}
 
-  const NOTION_TOKEN = process.env.NOTION_TOKEN;
-  const SLACK_TOKEN = process.env.SLACK_TOKEN;
-  const PROJECT_DB_ID = process.env.PROJECT_DB_ID;
-  const TASK_DB_ID = process.env.TASK_DB_ID;
+export default function App() {
+  const [clients, setClients] = useState([]);
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [tasks, setTasks] = useState([]);
+  const [loadingClients, setLoadingClients] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState("idle");
+  const [status, setStatus] = useState(null);
 
-  try {
-    if (action === "debug") {
-      const r = await fetch(`https://api.notion.com/v1/databases/${PROJECT_DB_ID}/query`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${NOTION_TOKEN}`,
-          "Content-Type": "application/json",
-          "Notion-Version": "2022-06-28",
-        },
-        body: JSON.stringify({ page_size: 3 }),
-      });
-      const data = await r.json();
-      const first = data.results?.[0];
-      return res.json({
-        httpStatus: r.status,
-        notionError: data.object === "error" ? { code: data.code, message: data.message } : null,
-        tokenPrefix: NOTION_TOKEN ? NOTION_TOKEN.slice(0, 10) : "MISSING",
-        dbId: PROJECT_DB_ID,
-        total: data.results?.length,
-        hasMore: data.has_more,
-        firstPageId: first?.id,
-        firstProps: first ? Object.keys(first.properties) : [],
-        clientNameRaw: first?.properties?.["Client Name"],
-        canvasIdRaw: first?.properties?.["Slack Canvas ID"],
-      });
-    }
+  useEffect(() => {
+    api("getClients").then((data) => {
+      setClients(data.clients || []);
+      setLoadingClients(false);
+    });
+  }, []);
 
-    if (action === "getClients") {
-      let allResults = [];
-      let hasMore = true;
-      let startCursor = undefined;
-      while (hasMore) {
-        const body = { page_size: 100 };
-        if (startCursor) body.start_cursor = startCursor;
-        const r = await fetch(`https://api.notion.com/v1/databases/${PROJECT_DB_ID}/query`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${NOTION_TOKEN}`,
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28",
-          },
-          body: JSON.stringify(body),
-        });
-        const data = await r.json();
-        allResults = allResults.concat(data.results || []);
-        hasMore = data.has_more;
-        startCursor = data.next_cursor;
-      }
-      const clients = allResults
-        .map((p) => {
-          const props = p.properties;
-          const canvasId = props["Slack Canvas ID"]?.rich_text?.[0]?.plain_text;
-          const name = props["Client Name"]?.title?.[0]?.plain_text;
-          return canvasId && name ? { id: p.id, name, canvasId } : null;
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.name.localeCompare(b.name));
-      return res.json({ clients, total: allResults.length });
-    }
-
-    if (action === "getTasks") {
-      const { clientId } = payload;
-      let allResults = [];
-      let hasMore = true;
-      let startCursor = undefined;
-      while (hasMore) {
-        const body = { page_size: 100 };
-        if (startCursor) body.start_cursor = startCursor;
-        const r = await fetch(`https://api.notion.com/v1/databases/${TASK_DB_ID}/query`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${NOTION_TOKEN}`,
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28",
-          },
-          body: JSON.stringify(body),
-        });
-        const data = await r.json();
-        allResults = allResults.concat(data.results || []);
-        hasMore = data.has_more;
-        startCursor = data.next_cursor;
-      }
-      const clientIdClean = clientId.replace(/-/g, "");
-      const tasks = allResults
-        .filter((p) => {
-          const relations = p.properties["Project Tracker Client"]?.relation || [];
-          const status = p.properties["Status"]?.status?.name;
-          const isClient = relations.some((r) => r.id === clientId || r.id === clientIdClean);
-          return isClient && status !== "Done";
-        })
-        .map((p) => {
-          const props = p.properties;
-          return {
-            actionItem: props["Client Tasks"]?.title?.[0]?.plain_text || "Untitled",
-            status: props["Status"]?.status?.name || "No Status",
-            responsible: props["Responsible Person"]?.people?.[0]?.name || "Unassigned",
-            dueDate: props["Due date"]?.date?.start || "No date",
-          };
-        });
-      return res.json({ tasks });
-    }
-
-    if (action === "updateCanvas") {
-      const { canvasId, taskMarkdown } = payload;
-      const lookupRes = await fetch("https://slack.com/api/canvases.sections.lookup", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ canvas_id: canvasId, criteria: { contains_text: "Client Tasks" } }),
-      });
-      const lookupData = await lookupRes.json();
-      if (!lookupData.ok || !lookupData.sections?.length) {
-        return res.json({ success: false, error: "Client Tasks section not found in canvas" });
-      }
-      const sectionId = lookupData.sections[0].id;
-      const editRes = await fetch("https://slack.com/api/canvases.edit", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${SLACK_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          canvas_id: canvasId,
-          changes: [{ operation: "replace", section_id: sectionId, document_content: { type: "markdown", markdown: taskMarkdown } }],
-        }),
-      });
-      const editData = await editRes.json();
-      return res.json({ success: editData.ok, error: editData.error });
-    }
-
-    return res.status(400).json({ error: "Unknown action" });
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
+  async function fetchTasks(clientId) {
+    setLoading(true);
+    setStep("fetching");
+    setTasks([]);
+    setStatus(null);
+    const data = await api("getTasks", { clientId });
+    setTasks(data.tasks || []);
+    setStep("preview");
+    setLoading(false);
   }
-};
+
+  async function updateCanvas() {
+    setLoading(true);
+    setStep("updating");
+    const taskMarkdown = `✅ **Client Tasks**\n\n${tasks
+      .map((t, i) => `- **${i + 1}. ${t.actionItem}**\n  - Status: ${t.status}\n  - Assignee: ${t.responsible}\n  - Due: ${t.dueDate}`)
+      .join("\n")}`;
+    const data = await api("updateCanvas", { canvasId: selectedClient.canvasId, taskMarkdown });
+    setStatus(data.success
+      ? { type: "success", message: `Canvas updated with ${tasks.length} task${tasks.length !== 1 ? "s" : ""}!` }
+      : { type: "error", message: data.error || "Failed to update canvas" });
+    setStep("done");
+    setLoading(false);
+  }
+
+  function reset() {
+    setSelectedClient(null);
+    setTasks([]);
+    setStatus(null);
+    setStep("idle");
+  }
+
+  const s = {
+    page: { minHeight: "100vh", background: "#0f0f0f", display: "flex", alignItems: "center", justifyContent: "center", padding: "2rem" },
+    card: { background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: 16, padding: "2rem", width: "100%", maxWidth: 540 },
+    label: { fontSize: 12, color: "#666", marginBottom: 6, display: "block", textTransform: "uppercase", letterSpacing: "0.05em" },
+    select: { width: "100%", background: "#111", border: "1px solid #2a2a2a", borderRadius: 8, padding: "10px 12px", color: "#fff", fontSize: 14, outline: "none", cursor: "pointer" },
+    btn: { width: "100%", padding: "12px", borderRadius: 8, border: "1px solid #2a2a2a", background: "#222", color: "#fff", fontSize: 14, cursor: "pointer", marginTop: 12 },
+    btnPrimary: { width: "100%", padding: "12px", borderRadius: 8, border: "none", background: "#5865F2", color: "#fff", fontSize: 14, cursor: "pointer", marginTop: 12, fontWeight: 500 },
+    taskCard: { background: "#111", border: "1px solid #2a2a2a", borderRadius: 8, padding: "12px 14px", marginBottom: 8 },
+    badge: (status) => ({
+      fontSize: 11, padding: "2px 8px", borderRadius: 4,
+      background: status === "In progress" ? "#1a3a5c" : "#1a1a1a",
+      color: status === "In progress" ? "#5ab4f5" : "#666",
+      border: "1px solid #2a2a2a"
+    }),
+    successBox: { background: "#0d2b1a", border: "1px solid #1a5c34", borderRadius: 8, padding: "14px 16px", marginBottom: 12 },
+    errorBox: { background: "#2b0d0d", border: "1px solid #5c1a1a", borderRadius: 8, padding: "14px 16px", marginBottom: 12 },
+  };
+
+  return (
+    <div style={s.page}>
+      <div style={s.card}>
+        <div style={{ marginBottom: "1.5rem" }}>
+          <p style={{ fontSize: 11, color: "#444", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.08em" }}>Editoz Club</p>
+          <h1 style={{ fontSize: 20, fontWeight: 600, color: "#fff", marginBottom: 6 }}>Canvas task updater</h1>
+          <p style={{ fontSize: 13, color: "#666" }}>Select a client, preview their active tasks, then push to their Slack canvas.</p>
+        </div>
+
+        <div style={{ marginBottom: "1.25rem" }}>
+          <label style={s.label}>Client</label>
+          {loadingClients ? (
+            <div style={{ fontSize: 13, color: "#444", padding: "10px 0" }}>Loading clients...</div>
+          ) : (
+            <select
+              style={s.select}
+              value={selectedClient?.id || ""}
+              onChange={(e) => {
+                const client = clients.find((c) => c.id === e.target.value);
+                setSelectedClient(client || null);
+                setTasks([]);
+                setStatus(null);
+                setStep("idle");
+              }}
+            >
+              <option value="">Select a client...</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {selectedClient && step === "idle" && (
+          <button style={s.btnPrimary} onClick={() => fetchTasks(selectedClient.id)} disabled={loading}>
+            Fetch active tasks
+          </button>
+        )}
+
+        {step === "fetching" && (
+          <div style={{ textAlign: "center", padding: "1.5rem 0", color: "#666", fontSize: 13 }}>
+            Fetching tasks from Notion...
+          </div>
+        )}
+
+        {step === "preview" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "1rem 0 10px" }}>
+              <span style={{ fontSize: 13, color: "#aaa" }}>
+                {tasks.length} active task{tasks.length !== 1 ? "s" : ""} for <strong style={{ color: "#fff" }}>{selectedClient.name}</strong>
+              </span>
+              <span style={{ fontSize: 11, color: "#444", textTransform: "uppercase", letterSpacing: "0.05em" }}>preview</span>
+            </div>
+
+            {tasks.length === 0 ? (
+              <div style={{ ...s.taskCard, color: "#555", fontSize: 13, textAlign: "center", padding: "1.5rem" }}>
+                No active tasks found for this client.
+              </div>
+            ) : (
+              tasks.map((task, i) => (
+                <div key={i} style={s.taskCard}>
+                  <div style={{ fontSize: 13, color: "#e0e0e0", marginBottom: 6, fontWeight: 500 }}>
+                    {i + 1}. {task.actionItem}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={s.badge(task.status)}>{task.status}</span>
+                    <span style={{ fontSize: 12, color: "#555" }}>👤 {task.responsible}</span>
+                    <span style={{ fontSize: 12, color: "#555" }}>📅 {task.dueDate}</span>
+                  </div>
+                </div>
+              ))
+            )}
+
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <button style={{ ...s.btn, flex: 1, marginTop: 8 }} onClick={reset}>Start over</button>
+              <button
+                style={{ ...s.btnPrimary, flex: 2, marginTop: 8, opacity: tasks.length === 0 ? 0.4 : 1 }}
+                onClick={updateCanvas}
+                disabled={tasks.length === 0 || loading}
+              >
+                Push to canvas
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "updating" && (
+          <div style={{ textAlign: "center", padding: "1.5rem 0", color: "#666", fontSize: 13 }}>
+            Updating Slack canvas...
+          </div>
+        )}
+
+        {step === "done" && status && (
+          <div>
+            <div style={status.type === "success" ? s.successBox : s.errorBox}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: status.type === "success" ? "#4ade80" : "#f87171" }}>
+                {status.type === "success" ? "✓ " : "✕ "}{status.message}
+              </div>
+            </div>
+            <button style={s.btn} onClick={reset}>Update another client</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
